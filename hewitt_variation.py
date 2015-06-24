@@ -2,6 +2,7 @@ from numpy import *
 from dolfin import *
 from adams_solver import *
 from channel_tools import *
+from scipy.optimize import fmin_l_bfgs_b
 
 ### Define the mesh and ice sheet geometry ###
 
@@ -122,6 +123,16 @@ N_n = Function(V)
 # Effective pressure on edges
 N_e = Function(V_edge)
 
+# This function derives several useful values from the potential including
+# values necessary for solving the ODE
+def derive_values():
+  # Derive effective pressure
+  N_n.vector()[:] = phi_0.vector().array() - phi.vector().array()
+  # Derive the water pressure
+  p_w.vector()[:] = phi.vector().array() - phi_m.vector().array()
+  # Water pressure as a fraction of overburden
+  pfo.vector()[:] = p_w.vector().array() / p_i.vector().array()
+
 
 
 ### Set up the channel model ###
@@ -159,7 +170,6 @@ dpw_ds_e = Function(V_edge)
 # the dissipation term, minimize the functional with that fixed phi, and use picard
 # iteration to improve that guess
 phi_guess = Function(V)
-phi_guess.assign(phi_0)
 # Derivative of phi_guess along channels
 dphi_ds_guess = dot(grad(phi_guess), t)
 # Dissipation involging phi_guess rather than the unknown phi
@@ -167,7 +177,7 @@ Xi_guess = (Constant(k_c) * S_exp + Constant(l_r * k) * h**alpha) * abs(dphi_ds_
 # Sheet opening term guess
 w_c_guess = Constant((rho_w - rho_i) / (rho_w * rho_i * L)) * Xi_guess
 
-J1 = Constant((1.0 / beta) * k) * h**alpha *(dot(grad(phi), grad(phi)) + phi_reg)**(beta / 2.0)
+J1 = Constant((1.0 / beta) * k) * h**alpha * (dot(grad(phi), grad(phi)) + phi_reg)**(beta / 2.0)
 J2 = Constant(0.25 * A) * h * N**4 
 J3 = (w - m) * phi 
 J4 = Constant((1.0 / beta) * k_c) * S_exp * (abs(dphi_ds) + Constant(phi_reg))**beta
@@ -192,7 +202,9 @@ theta = TestFunction(V)
 F_s = -dot(grad(theta), q) * dx + (w - v - m) * theta * dx
 F_c = -(dot(grad(theta), t) * Q + (w_c_guess - v_c) * theta)('+') * dS
 F = F_s + F_c
-# Jacobian
+# Compute Jacobian
+d_phi = TrialFunction(V)
+J = derivative(F, phi, d_phi)
 
 # Define the margin boundary
 def margin(x, on_boundary):
@@ -221,25 +233,31 @@ params['newton_solver']['maximum_iterations'] = 40
 params['newton_solver']['linear_solver'] = 'umfpack'
 
 solve(F == 0, phi, bc, J = J, solver_parameters = params)
+derive_values()
+plot(pfo, interactive = True)
+
 phi_guess.assign(phi)
-phi.assign(phi_m)
+phi.assign(phi_0)
+bc.apply(phi.vector())
 
 plot(phi_guess, interactive = True)
 plot(phi, interactive = True)
-quit()
+
 
 
 ### Solve for the potential. ###
 # Define upper and lower boundaries for the pressure
 bounds = zip(phi_m.vector().array(), phi_0.vector().array())
 
-# Solve fot the potential with bfgs
+# Solve for the potential with bfgs
 def solve_phi():
   x, f, d = fmin_l_bfgs_b(J_func, phi.vector().array(), F_func, bounds = bounds)
   phi.vector()[:] = x
 
-  
-
+solve_phi()
+plot(phi, interactive = True)
+derive_values()
+plot(pfo, interactive = True)
 
 
 
